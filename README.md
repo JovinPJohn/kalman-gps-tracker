@@ -16,6 +16,7 @@ A real-time location tracking system using Kalman filtering for smoother and mor
 ## 📁 Files Included
 - kalman_tracker.ino
 - gps_circuit_diagram.png
+- index.html
 
 ## 👤 Author
 **Jovin P John**  
