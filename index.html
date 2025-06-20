@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kalman-Powered GPS and Geofencing</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" />
+  <style>
+    body { background: #f8f9fa; }
+    #map { height: 600px; border-radius: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+    .status-card { background: linear-gradient(145deg, #ffffff, #f1f1f1); }
+    .satellite-info { background: #e9ecef; padding: 15px; border-radius: 8px; }
+    .status-indicator { width: 20px; height: 20px; border-radius: 50%; transition: background-color 0.3s ease; }
+  </style>
+  <audio id="alertSound" src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3"></audio>
+</head>
+<body>
+  <div class="container py-4">
+    <h1 class="text-center mb-4 display-5 fw-bold text-primary">Kalman-Powered GPS and Geofencing</h1>
+    <div class="row g-4 mb-4">
+      <div class="col-lg-4">
+        <div class="card shadow-sm">
+          <div class="card-header bg-primary text-white">
+            <h5 class="mb-0"><i class="bi bi-gear-wide-connected"></i> Device Controls</h5>
+          </div>
+          <div class="card-body">
+            <div class="mb-3">
+              <label class="form-label">Geofence Radius (meters)</label>
+              <input type="number" class="form-control" id="radiusInput" value="100" min="10">
+            </div>
+            <div class="d-grid gap-2">
+              <button id="setGeofenceBtn" class="btn btn-primary"><i class="bi bi-fence"></i> Update Geofence</button>
+              <button id="resetPathBtn" class="btn btn-outline-secondary"><i class="bi bi-arrow-counterclockwise"></i> Clear History</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-8">
+        <div class="row g-4">
+          <div class="col-md-6">
+            <div class="status-card p-3">
+              <h5><i class="bi bi-pin-map-fill"></i> Current Status</h5>
+              <div class="d-flex align-items-center mt-2">
+                <div id="statusIndicator" class="status-indicator me-3"></div>
+                <p class="lead mb-0" id="statusText">Acquiring GPS...</p>
+              </div>
+            </div>
+            <div class="satellite-info mt-3">
+              <h6><i class="bi bi-satellite"></i> Satellite Details</h6>
+              <p class="mb-1">Connected: <span id="satCount">0</span></p>
+              <p class="mb-0">HDOP: <span id="hdopValue">-</span></p>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="card shadow-sm">
+              <div class="card-header bg-warning text-dark">
+                <h5 class="mb-0"><i class="bi bi-geo-alt-fill"></i> Geofence Center</h5>
+              </div>
+              <div class="card-body">
+                <p class="mb-1">Latitude: <span id="geoCenterLat" class="text-primary fw-bold">-</span></p>
+                <p class="mb-0">Longitude: <span id="geoCenterLng" class="text-primary fw-bold">-</span></p>
+              </div>
+            </div>
+            <div class="card shadow-sm mt-3">
+              <div class="card-header bg-info text-white">
+                <h5 class="mb-0"><i class="bi bi-cloud-arrow-up-fill"></i> Firebase Stream</h5>
+              </div>
+              <div class="card-body">
+                <div class="row">
+                  <div class="col-6">
+                    <h6 class="text-secondary">Raw Data</h6>
+                    <p class="mb-1">Current Lat: <span id="rawLat" class="text-primary fw-bold">-</span></p>
+                    <p class="mb-1">Current Lng: <span id="rawLng" class="text-primary fw-bold">-</span></p>
+                    <p class="mb-1">Previous Lat: <span id="prevRawLat" class="text-secondary">-</span></p>
+                    <p class="mb-1">Previous Lng: <span id="prevRawLng" class="text-secondary">-</span></p>
+                  </div>
+                  <div class="col-6">
+                    <h6 class="text-success">Filtered</h6>
+                    <p class="mb-1">Current Lat: <span id="filteredLat" class="text-primary fw-bold">-</span></p>
+                    <p class="mb-1">Current Lng: <span id="filteredLng" class="text-primary fw-bold">-</span></p>
+                    <p class="mb-1">Previous Lat: <span id="prevFilteredLat" class="text-secondary">-</span></p>
+                    <p class="mb-1">Previous Lng: <span id="prevFilteredLng" class="text-secondary">-</span></p>
+                  </div>
+                </div>
+                <p class="mb-1 mt-2">Last Update: <span id="lastUpdate" class="badge bg-success">-</span></p>
+                <p class="mb-0">Accuracy: <span id="accuracyValue">-</span>m</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="map"></div>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/9.0.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.0.0/firebase-database-compat.js"></script>
+  <script src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_API_KEY&libraries=geometry"></script>
+  <script>
+    const firebaseConfig = {
+      apiKey: "YOUR_FIREBASE_API_KEY",
+      authDomain: "YOUR_FIREBASE_AUTH_DOMAIN",
+      databaseURL: "YOUR_FIREBASE_DATABASE_URL",
+      projectId: "YOUR_FIREBASE_PROJECT_ID",
+      storageBucket: "YOUR_FIREBASE_STORAGE_BUCKET",
+      messagingSenderId: "YOUR_FIREBASE_SENDER_ID",
+      appId: "YOUR_FIREBASE_APP_ID",
+      measurementId: "YOUR_FIREBASE_MEASUREMENT_ID"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const database = firebase.database();
+
+    let map, geofenceCircle, rawMarker, filteredMarker, pathPolyline, rawPathPolyline, centerMarker;
+    let pathCoordinates = [];
+    let rawPathCoordinates = [];
+    const MAX_HISTORY = 150;
+    let geofenceCenter = null;
+    let kalmanGain = 0.1;
+    let prevFilteredPosition = null;
+    let positionBuffer = [];
+    const BUFFER_SIZE = 5;
+    let isInsideGeofence = true;
+
+    function initMap() {
+      map = new google.maps.Map(document.getElementById('map'), {
+        zoom: 20,
+        center: { lat: 10.019569, lng: 76.276761 },
+        mapTypeId: 'hybrid',
+        streetViewControl: false,
+        fullscreenControl: false
+      });
+
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(position => {
+          geofenceCenter = new google.maps.LatLng(position.coords.latitude, position.coords.longitude);
+          document.getElementById('geoCenterLat').textContent = position.coords.latitude.toFixed(6);
+          document.getElementById('geoCenterLng').textContent = position.coords.longitude.toFixed(6);
+          centerMarker = new google.maps.Marker({
+            position: geofenceCenter,
+            map: map,
+            icon: { path: google.maps.SymbolPath.CIRCLE, scale: 8, fillColor: '#ff0000', fillOpacity: 0.9, strokeColor: '#ffffff', strokeWeight: 2 }
+          });
+          map.setCenter(geofenceCenter);
+          setGeofence();
+        }, () => {
+          geofenceCenter = new google.maps.LatLng(10.019569, 76.276761);
+          setGeofence();
+        });
+      } else {
+        geofenceCenter = new google.maps.LatLng(10.019569, 76.276761);
+        setGeofence();
+      }
+
+      database.ref('devices/esp32_01').limitToLast(1).on('value', snapshot => {
+        if (!snapshot.exists()) return;
+        const lastKey = Object.keys(snapshot.val())[0];
+        const data = snapshot.val()[lastKey];
+        if (!data) return;
+        if (data.hdop && data.hdop > 2.5) return;
+
+        document.getElementById('prevRawLat').textContent = document.getElementById('rawLat').textContent;
+        document.getElementById('prevRawLng').textContent = document.getElementById('rawLng').textContent;
+        document.getElementById('prevFilteredLat').textContent = document.getElementById('filteredLat').textContent;
+        document.getElementById('prevFilteredLng').textContent = document.getElementById('filteredLng').textContent;
+
+        if (positionBuffer.length >= BUFFER_SIZE) positionBuffer.shift();
+        positionBuffer.push({ lat: data.raw.lat, lng: data.raw.lng });
+        const avgPosition = positionBuffer.reduce((acc, pos) => {
+          return { lat: acc.lat + pos.lat / positionBuffer.length, lng: acc.lng + pos.lng / positionBuffer.length };
+        }, { lat: 0, lng: 0 });
+
+        document.getElementById('rawLat').textContent = avgPosition.lat.toFixed(6);
+        document.getElementById('rawLng').textContent = avgPosition.lng.toFixed(6);
+
+        const rawPosition = new google.maps.LatLng(avgPosition.lat, avgPosition.lng);
+        if (!prevFilteredPosition) prevFilteredPosition = rawPosition;
+        const newLat = prevFilteredPosition.lat() + kalmanGain * (avgPosition.lat - prevFilteredPosition.lat());
+        const newLng = prevFilteredPosition.lng() + kalmanGain * (avgPosition.lng - prevFilteredPosition.lng());
+        const filteredPosition = new google.maps.LatLng(newLat, newLng);
+        prevFilteredPosition = filteredPosition;
+
+        document.getElementById('filteredLat').textContent = newLat.toFixed(6);
+        document.getElementById('filteredLng').textContent = newLng.toFixed(6);
+        document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+        document.getElementById('accuracyValue').textContent = data.hdop ? data.hdop.toFixed(1) : 'N/A';
+        document.getElementById('satCount').textContent = data.satellites || '0';
+        document.getElementById('hdopValue').textContent = data.hdop ? data.hdop.toFixed(1) : '-';
+
+        if (!rawMarker) {
+          rawMarker = new google.maps.Marker({ position: rawPosition, map: map, icon: { path: google.maps.SymbolPath.CIRCLE, scale: 10, fillColor: '#dc3545', fillOpacity: 0.9, strokeColor: '#ffffff', strokeWeight: 2 } });
+        } else {
+          rawMarker.setPosition(rawPosition);
+        }
+
+        if (!filteredMarker) {
+          filteredMarker = new google.maps.Marker({ position: filteredPosition, map: map, icon: { path: google.maps.SymbolPath.CIRCLE, scale: 10, fillColor: '#28a745', fillOpacity: 0.9, strokeColor: '#ffffff', strokeWeight: 2 } });
+        } else {
+          filteredMarker.setPosition(filteredPosition);
+        }
+
+        if (!map.getBounds().contains(filteredPosition)) map.panTo(filteredPosition);
+
+        if (geofenceCircle) {
+          const distance = google.maps.geometry.spherical.computeDistanceBetween(geofenceCircle.getCenter(), filteredPosition);
+          const statusElement = document.getElementById('statusText');
+          const indicator = document.getElementById('statusIndicator');
+          const alertSound = document.getElementById('alertSound');
+          if (distance <= geofenceCircle.getRadius()) {
+            statusElement.textContent = `Within Safe Zone (${distance.toFixed(1)}m)`;
+            indicator.style.backgroundColor = '#28a745';
+            isInsideGeofence = true;
+          } else {
+            statusElement.textContent = `Outside Safe Zone (${distance.toFixed(1)}m)`;
+            indicator.style.backgroundColor = '#dc3545';
+            if (isInsideGeofence) {
+              alertSound.play();
+              isInsideGeofence = false;
+            }
+          }
+        }
+
+        pathCoordinates.push(filteredPosition);
+        if (pathCoordinates.length > MAX_HISTORY) pathCoordinates.shift();
+        if (pathPolyline) {
+          pathPolyline.setPath(pathCoordinates);
+        } else {
+          pathPolyline = new google.maps.Polyline({ path: pathCoordinates, geodesic: true, strokeColor: '#007bff', strokeOpacity: 0.7, strokeWeight: 4, map: map });
+        }
+
+        rawPathCoordinates.push(rawPosition);
+        if (rawPathCoordinates.length > MAX_HISTORY) rawPathCoordinates.shift();
+        if (rawPathPolyline) {
+          rawPathPolyline.setPath(rawPathCoordinates);
+        } else {
+          rawPathPolyline = new google.maps.Polyline({ path: rawPathCoordinates, geodesic: true, strokeColor: '#dc3545', strokeOpacity: 0.7, strokeWeight: 4, map: map });
+        }
+      });
+
+      document.getElementById('setGeofenceBtn').addEventListener('click', setGeofence);
+      document.getElementById('resetPathBtn').addEventListener('click', () => {
+        pathCoordinates = [];
+        rawPathCoordinates = [];
+        if (pathPolyline) pathPolyline.setMap(null);
+        if (rawPathPolyline) rawPathPolyline.setMap(null);
+      });
+    }
+
+    function setGeofence() {
+      const radius = parseInt(document.getElementById('radiusInput').value);
+      if (radius > 0 && geofenceCenter) {
+        if (geofenceCircle) geofenceCircle.setMap(null);
+        geofenceCircle = new google.maps.Circle({ strokeColor: '#ff4444', strokeOpacity: 0.3, strokeWeight: 2, fillColor: '#ff4444', fillOpacity: 0.15, map: map, center: geofenceCenter, radius: radius });
+        if (centerMarker) centerMarker.setMap(map);
+      }
+    }
+
+    window.onload = initMap;
+  </script>
+</body>
+</html>
